@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DevPulse — Premium Live Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #080c12; color: #fff; font-family: 'DM Sans', sans-serif; min-height: 100vh; }
+  button { font-family: inherit; }
+  .mono { font-family: monospace; }
+  
+  /* Header UI */
+  .tab { background: none; border: none; cursor: pointer; padding: 7px 13px; border-radius: 8px; font-size: 12px; font-family: monospace; letter-spacing: 0.04em; color: rgba(255,255,255,0.35); font-weight: 400; transition: all 0.15s; }
+  .tab.active { background: rgba(0,255,136,0.08); color: #00ff88; font-weight: 700; }
+  
+  /* Period Toggle Pill */
+  .period-wrap { display: flex; background: rgba(255,255,255,0.03); padding: 3px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); }
+  .period-btn { background: transparent; color: rgba(255,255,255,0.4); border: none; padding: 4px 10px; border-radius: 6px; font-size: 10px; font-weight: 700; fontFamily: monospace; cursor: pointer; transition: all 0.15s; }
+  .period-btn.active { background: #00ff88; color: #080c12; }
+
+  /* Premium Stat Card with Sparkline */
+  .stat-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 20px 22px; display: flex; justify-content: space-between; align-items: center; transition: transform 0.2s, border-color 0.2s; }
+  .stat-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.15); }
+  .stat-label { color: rgba(255,255,255,0.4); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; font-family: monospace; margin-bottom: 8px; }
+  .stat-value { font-size: 28px; font-weight: 700; font-family: monospace; line-height: 1; }
+  .stat-unit { font-size: 12px; color: rgba(255,255,255,0.3); font-family: monospace; margin-left: 6px; }
+  .stat-sub { font-size: 11px; color: rgba(255,255,255,0.25); font-family: monospace; margin-top: 4px; }
+  
+  /* Sparkline Container */
+  .spark-container { display: flex; align-items: center; opacity: 0.8; transition: opacity 0.2s; }
+  .stat-card:hover .spark-container { opacity: 1; }
+
+  /* Table styling */
+  table { width: 100%; border-collapse: collapse; font-family: monospace; font-size: 12px; }
+  th { text-align: left; padding: 6px 10px; color: rgba(255,255,255,0.22); border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 400; }
+  td { padding: 9px 10px; color: rgba(255,255,255,0.5); border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 7px; vertical-align: middle; flex-shrink: 0; }
+  
+  /* Charts */
+  .bar-wrap { display: flex; align-items: flex-end; gap: 3px; height: 48px; }
+  .bar-col { flex: 1; display: flex; flex-direction: column; height: 100%; justify-content: flex-end; }
+  
+  .section { padding: 26px; }
+  .section-title { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 4px; }
+  .section-sub { font-size: 11px; color: rgba(255,255,255,0.28); font-family: monospace; }
+  .grid4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-bottom: 18px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 18px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .card { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 18px; }
+  .card-label { font-size: 10px; color: rgba(255,255,255,0.28); letter-spacing: 0.1em; text-transform: uppercase; font-family: monospace; margin-bottom: 14px; }
+  
+  .demo-banner { background: rgba(0,255,136,0.06); border-bottom: 1px solid rgba(0,255,136,0.15); padding: 8px 26px; font-size: 11px; font-family: monospace; color: rgba(0,255,136,0.7); display: flex; align-items: center; justify-content: space-between; }
+  .team-card { border-radius: 12px; padding: 15px 17px; cursor: pointer; transition: all 0.15s; }
+  .team-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px,1fr)); gap: 10px; margin-bottom: 22px; }
+  .mini-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .prog-bg { height: 5px; border-radius: 3px; background: rgba(255,255,255,0.05); margin-top: 5px; }
+  .prog-fill { height: 100%; border-radius: 3px; transition: width 0.8s; }
+</style>
+</head>
+<body>
+
+<!-- Demo Banner -->
+<div class="demo-banner">
+  <span>⚡ DEMO MODE — Slicing SQLite-persisted historical events. Toggling filters recomputes metrics client-side.</span>
+  <span style="opacity: 0.6;">Database Status: Synced</span>
+</div>
+
+<!-- Header -->
+<div id="header" style="border-bottom:1px solid rgba(255,255,255,0.07);padding:13px 26px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+  <div style="display:flex;align-items:center;gap:12px">
+    <span class="mono" style="font-size:11px;letter-spacing:0.2em;color:rgba(255,255,255,0.22)">DEVPULSE</span>
+    <span style="width:1px;height:13px;background:rgba(255,255,255,0.1);display:inline-block"></span>
+    <span class="mono" style="font-size:11px;color:rgba(255,255,255,0.3)">acme-corp/platform · ENG</span>
+  </div>
+
+  <!-- Period toggler -->
+  <div class="period-wrap">
+    <button class="period-btn" onclick="setPeriod(7)">7D</button>
+    <button class="period-btn" onclick="setPeriod(30)">30D</button>
+    <button class="period-btn active" onclick="setPeriod(90)">90D</button>
+    <button class="period-btn" onclick="setPeriod(180)">6M</button>
+    <button class="period-btn" onclick="setPeriod(365)">1Y</button>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+    <button class="tab active" onclick="setTab('teams')">Teams</button>
+    <button class="tab" onclick="setTab('devs')">Developers</button>
+    <button class="tab" onclick="setTab('github')">GitHub</button>
+    <button class="tab" onclick="setTab('jira')">Jira</button>
+    <button class="tab" onclick="setTab('review')">Review</button>
+  </div>
+</div>
+
+<!-- TEAMS TAB -->
+<div id="tab-teams" class="section">
+  <div style="margin-bottom:18px">
+    <div class="section-title">Team Overview</div>
+    <div class="section-sub" id="team-sub">3 teams · SQLite aggregate</div>
+  </div>
+  <div class="team-grid" id="team-cards"></div>
+  <div id="team-detail" class="card"></div>
+</div>
+
+<!-- DEVELOPERS TAB -->
+<div id="tab-devs" class="section" style="display:none">
+  <div style="margin-bottom:18px">
+    <div class="section-title">All Developers</div>
+    <div class="section-sub" id="devs-sub">Unified Jira + GitHub</div>
+  </div>
+  <div class="card">
+    <table>
+      <thead><tr><th>Developer</th><th>Team</th><th>GitHub</th><th>PRs</th><th>PR Cycle</th><th>Jira Done</th><th>Jira Cycle</th></tr></thead>
+      <tbody id="devs-table"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- GITHUB TAB -->
+<div id="tab-github" class="section" style="display:none">
+  <div style="margin-bottom:18px">
+    <div class="section-title">Pull Request Metrics</div>
+    <div class="section-sub" id="gh-sub">Historical pull request velocity</div>
+  </div>
+  <div class="grid4" id="gh-metrics-cards">
+    <!-- Rendered dynamically -->
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-label">Weekly Merge Rate</div>
+      <div class="bar-wrap" id="gh-bars"></div>
+      <div style="display:flex;justify-content:space-between;margin-top:6px" id="gh-bar-labels"></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Contributors</div>
+      <table><thead><tr><th>Author</th><th>Team</th><th>PRs</th><th>Avg Cycle</th></tr></thead><tbody id="gh-contributors"></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- JIRA TAB -->
+<div id="tab-jira" class="section" style="display:none">
+  <div style="margin-bottom:18px">
+    <div class="section-title">Ticket Throughput & Velocity</div>
+    <div class="section-sub" id="jira-sub">Historical ticket throughput</div>
+  </div>
+  <div class="grid4" id="jira-metrics-cards">
+    <!-- Rendered dynamically -->
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-label">Weekly Velocity</div>
+      <div class="bar-wrap" id="jira-bars"></div>
+      <div style="display:flex;justify-content:space-between;margin-top:6px" id="jira-bar-labels"></div>
+    </div>
+    <div class="card">
+      <div class="card-label">By Assignee</div>
+      <table><thead><tr><th>Assignee</th><th>Team</th><th>Done</th><th>Total</th><th>%</th></tr></thead><tbody id="jira-assignees"></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- REVIEW TAB -->
+<div id="tab-review" class="section" style="display:none">
+  <div style="margin-bottom:18px">
+    <div class="section-title">Code Review Health</div>
+    <div class="section-sub">First-response and end-to-end review metrics</div>
+  </div>
+  <div class="grid3" id="review-metrics-cards">
+    <!-- Rendered dynamically -->
+  </div>
+  <div class="card">
+    <div class="card-label">Pipeline Breakdown</div>
+    <div style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+        <span class="mono" style="font-size:12px;color:rgba(255,255,255,0.4)">Open → First Review</span>
+        <span class="mono" style="font-size:12px;color:#00ff88;font-weight:700" id="pr-review-time">0.8d</span>
+      </div>
+      <div class="prog-bg"><div class="prog-fill" id="prog-review-bar" style="background:#00ff88;width:35%"></div></div>
+    </div>
+    <div style="margin-bottom:18px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+        <span class="mono" style="font-size:12px;color:rgba(255,255,255,0.4)">First Review → Merge</span>
+        <span class="mono" style="font-size:12px;color:#f59e0b;font-weight:700" id="pr-merge-lag">1.5d</span>
+      </div>
+      <div class="prog-bg"><div class="prog-fill" id="prog-merge-bar" style="background:#f59e0b;width:65%"></div></div>
+    </div>
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.05)">
+      <div class="mono" style="font-size:10px;color:rgba(255,255,255,0.22);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:10px">By Team</div>
+      <table><thead><tr><th>Team</th><th>Members</th><th>Total PRs</th><th>Avg Cycle</th></tr></thead><tbody id="review-teams"></tbody></table>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Historical Events Database Mock (Allows slicing dynamically by time) ────
+const TEAM_COLORS = ["#00ff88","#00c4ff","#a78bfa","#f59e0b","#f472b6"];
+
+const teams = [
+  { id:"t1", name:"Platform", color:"#00ff88",  members:["Alice Chen","Bob Kapur","Carol Diaz"] },
+  { id:"t2", name:"Growth",   color:"#00c4ff",  members:["David Kim","Eva Rossi"] },
+  { id:"t3", name:"Infra",    color:"#a78bfa",  members:["Frank Wu","Grace Park"] },
+];
+
+const developers = [
+  { name:"Alice Chen",  team:"t1", ghLogin:"achen",    prs:18, prCycle:1.9, jiraDone:22, jiraCycle:3.8 },
+  { name:"Bob Kapur",   team:"t1", ghLogin:"bkapur",   prs:14, prCycle:2.4, jiraDone:17, jiraCycle:4.2 },
+  { name:"Carol Diaz",  team:"t1", ghLogin:"cdiaz",    prs:11, prCycle:2.1, jiraDone:19, jiraCycle:5.0 },
+  { name:"David Kim",   team:"t2", ghLogin:"dkim",     prs:16, prCycle:2.8, jiraDone:14, jiraCycle:6.1 },
+  { name:"Eva Rossi",   team:"t2", ghLogin:"erossi",   prs:9,  prCycle:3.2, jiraDone:11, jiraCycle:4.9 },
+  { name:"Frank Wu",    team:"t3", ghLogin:"fwu",      prs:10, prCycle:1.7, jiraDone:20, jiraCycle:3.5 },
+  { name:"Grace Park",  team:"t3", ghLogin:"gpark",    prs:6,  prCycle:2.2, jiraDone:15, jiraCycle:4.3 },
+];
+
+// Historical weekly values for trend-line sparklines
+const historicalTrends = {
+  cyclePR: [2.8, 2.7, 2.5, 2.4, 2.6, 2.2, 2.3, 2.1, 2.3],
+  mergeRate: [4.2, 5.0, 4.8, 6.1, 5.5, 6.4, 7.2, 6.8, 6.5],
+  jiraCycle: [5.2, 5.1, 4.9, 4.8, 5.0, 4.6, 4.7, 4.5, 4.7],
+  jiraDone: [8, 12, 9, 14, 10, 16, 11, 13, 9]
+};
+
+let activeTab = "teams";
+let selectedTeam = "t1";
+let period = 90; // Selected period (7, 30, 90, 180, 365 days)
+
+function setTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
+  event.target.classList.add("active");
+  ["teams","devs","github","jira","review"].forEach(t => {
+    document.getElementById("tab-"+t).style.display = t === tab ? "block" : "none";
+  });
+  renderAll();
+}
+
+function setPeriod(days) {
+  period = days;
+  document.querySelectorAll(".period-btn").forEach(b => b.classList.remove("active"));
+  event.target.classList.add("active");
+  renderAll();
+}
+
+// ── SVG Sparkline Helper ───────────────────────────────────────────────────
+function getSparklineSVG(data, color) {
+  const width = 110;
+  const height = 32;
+  const max = Math.max(...data, 1);
+  const min = Math.min(...data, 0);
+  const range = max - min || 1;
+  const points = data.map((val, idx) => {
+    const x = (idx / (data.length - 1)) * width;
+    const y = height - ((val - min) / range) * height;
+    return `${x},${y}`;
+  }).join(" ");
+
+  return `<svg width="${width}" height="${height}" style="overflow:visible;margin-left:auto">
+    <polyline fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" points="${points}"></polyline>
+  </svg>`;
+}
+
+// ── Stat Card Dynamic Maker ────────────────────────────────────────────────
+function makeStatCard(label, value, unit, sub, color, trendData) {
+  return `<div class="stat-card">
+    <div>
+      <div class="stat-label">${label}</div>
+      <div><span class="stat-value" style="color:${color}">${value}</span><span class="stat-unit">${unit}</span></div>
+      <div class="stat-sub">${sub}</div>
+    </div>
+    <div class="spark-container">${getSparklineSVG(trendData, color)}</div>
+  </div>`;
+}
+
+// ── Master Render Triggered by Period Slices ───────────────────────────────
+function renderAll() {
+  // Compute multiplier based on period to simulate database aggregations
+  const scale = period / 90;
+  const weeks = Math.round(period / 7);
+
+  // Update subheadings
+  document.getElementById("team-sub").innerText = `3 teams · aggregated last ${period} days from SQLite`;
+  document.getElementById("devs-sub").innerText = `Unified Jira + GitHub · ${developers.length} users linked`;
+  document.getElementById("gh-sub").innerText = `Last ${period} days · ${Math.round(84 * scale)} merged PRs`;
+  document.getElementById("jira-sub").innerText = `Last ${period} days · ${Math.round(203 * scale)} issues`;
+
+  // Render Teams Tab
+  const teamCards = document.getElementById("team-cards");
+  teamCards.innerHTML = teams.map(t => {
+    const sel = selectedTeam === t.id;
+    const members = developers.filter(d => d.team === t.id);
+    const prs = Math.round(members.reduce((s,d) => s + d.prs, 0) * scale);
+    const done = Math.round(members.reduce((s,d) => s + d.jiraDone, 0) * scale);
+    const avgCycle = (members.reduce((s,d) => s + d.prCycle, 0) / members.length).toFixed(1);
+
+    return `<div class="team-card" style="background:${sel?t.color+"12":"rgba(255,255,255,0.02)"};border:1px solid ${sel?t.color+"45":"rgba(255,255,255,0.07)"}" onclick="selectTeam('${t.id}')">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <span class="dot" style="background:${t.color};width:9px;height:9px"></span>
+        <span style="font-size:13px;font-weight:600">${t.name}</span>
+      </div>
+      <div class="mini-grid">
+        ${[["PRs", prs],["Done", done],["Cycle", avgCycle+"d"],["Devs", members.length]].map(([l,v]) =>
+          `<div><div class="mono" style="font-size:9px;color:rgba(255,255,255,0.22);text-transform:uppercase;letter-spacing:0.07em">${l}</div><div class="mono" style="font-size:17px;font-weight:700;color:${t.color}">${v}</div></div>`
+        ).join("")}
+      </div>
+    </div>`;
+  }).join("");
+
+  const activeTeamObj = teams.find(t => t.id === selectedTeam);
+  const activeMembers = developers.filter(d => d.team === selectedTeam);
+  const detail = document.getElementById("team-detail");
+  detail.style.border = `1px solid ${activeTeamObj.color}28`;
+  detail.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+      <span class="dot" style="background:${activeTeamObj.color};width:9px;height:9px"></span>
+      <span style="font-size:13px;font-weight:700">${activeTeamObj.name}</span>
+      <span class="mono" style="font-size:11px;color:rgba(255,255,255,0.25)">member breakdown (sliced to ${period}D)</span>
+    </div>
+    <table>
+      <thead><tr><th>Developer</th><th>GitHub</th><th>PRs</th><th>PR Cycle</th><th>Jira Done</th><th>Jira Cycle</th></tr></thead>
+      <tbody>
+        ${activeMembers.map(d => `<tr>
+          <td><span class="dot" style="background:${activeTeamObj.color}"></span><span style="color:rgba(255,255,255,0.75)">${d.name}</span></td>
+          <td style="color:rgba(255,255,255,0.5)">${d.ghLogin}</td>
+          <td>${Math.round(d.prs * scale)}</td>
+          <td>${d.prCycle.toFixed(1)}d</td>
+          <td>${Math.round(d.jiraDone * scale)}</td>
+          <td>${d.jiraCycle.toFixed(1)}d</td>
+        </tr>`).join("")}
+      </tbody>
+    </table>`;
+
+  // Render Developers Tab
+  const devsTable = document.getElementById("devs-table");
+  devsTable.innerHTML = developers.map(d => {
+    const t = teams.find(team => team.id === d.team);
+    return `<tr>
+      <td><span class="dot" style="background:${t.color}"></span><span style="color:rgba(255,255,255,0.75)">${d.name}</span></td>
+      <td style="color:${t.color}">${t.name}</td>
+      <td style="color:rgba(255,255,255,0.5)">${d.ghLogin}</td>
+      <td>${Math.round(d.prs * scale)}</td>
+      <td>${d.prCycle.toFixed(1)}d</td>
+      <td>${Math.round(d.jiraDone * scale)}</td>
+      <td>${d.jiraCycle.toFixed(1)}d</td>
+    </tr>`;
+  }).join("");
+
+  // Render GitHub Tab Metrics with Sparklines
+  const ghCards = document.getElementById("gh-metrics-cards");
+  ghCards.innerHTML = 
+    makeStatCard("Avg Cycle Time", "2.3", "days", "open → merged", "#00ff88", historicalTrends.cyclePR) +
+    makeStatCard("Merge Rate", (6.5).toFixed(1), "/ week", `trailing ${weeks} weeks`, "#00c4ff", historicalTrends.mergeRate) +
+    makeStatCard("PRs Merged", Math.round(84 * scale), "total", `last ${period} days`, "#a78bfa", historicalTrends.mergeRate) +
+    makeStatCard("Avg Review Time", "0.8", "days", "open → first review", "#f59e0b", [0.9, 1.1, 0.8, 1.0, 0.7, 0.8]);
+
+  // GitHub contributors list
+  const ghContribs = document.getElementById("gh-contributors");
+  ghContribs.innerHTML = developers.sort((a,b) => b.prs - a.prs).map(d => {
+    const t = teams.find(team => team.id === d.team);
+    return `<tr>
+      <td><span class="dot" style="background:${t.color}"></span><span style="color:rgba(255,255,255,0.7)">${d.ghLogin}</span></td>
+      <td style="color:${t.color}">${t.name}</td>
+      <td>${Math.round(d.prs * scale)}</td>
+      <td>${d.prCycle.toFixed(1)}d</td>
+    </tr>`;
+  }).join("");
+
+  // Render Jira Tab Metrics with Sparklines
+  const jiraCards = document.getElementById("jira-metrics-cards");
+  jiraCards.innerHTML = 
+    makeStatCard("Throughput", (9.1 * Math.min(1, scale)).toFixed(1), "/ week", "tickets closed", "#00ff88", historicalTrends.jiraDone) +
+    makeStatCard("Avg Cycle Time", "4.7", "days", "created → resolved", "#00c4ff", historicalTrends.jiraCycle) +
+    makeStatCard("Completed", Math.round(118 * scale), "issues", `last ${period} days`, "#a78bfa", historicalTrends.jiraDone) +
+    makeStatCard("In Progress", "14", "issues", "currently active", "#f59e0b", [12, 15, 14, 16, 13, 14]);
+
+  // Jira assignees list
+  const jiraAssigns = document.getElementById("jira-assignees");
+  jiraAssigns.innerHTML = developers.sort((a,b) => b.jiraDone - a.jiraDone).map(d => {
+    const t = teams.find(team => team.id === d.team);
+    const pct = Math.round((d.jiraDone / (d.jiraDone + 3)) * 100);
+    return `<tr>
+      <td><span class="dot" style="background:${t.color}"></span><span style="color:rgba(255,255,255,0.7)">${d.name}</span></td>
+      <td style="color:${t.color}">${t.name}</td>
+      <td>${Math.round(d.jiraDone * scale)}</td>
+      <td>${Math.round((d.jiraDone + 3) * scale)}</td>
+      <td>${pct}%</td>
+    </tr>`;
+  }).join("");
+
+  // Render Review Tab Metrics with Sparklines
+  const reviewCards = document.getElementById("review-metrics-cards");
+  reviewCards.innerHTML = 
+    makeStatCard("Time to First Review", "0.8", "days", "avg across last 20 PRs", "#00ff88", [1.0, 1.2, 0.9, 0.8]) +
+    makeStatCard("PR Cycle Time", "2.3", "days", "open → merged", "#00c4ff", historicalTrends.cyclePR) +
+    makeStatCard("Review Lag", "1.5", "days", "first review → merge", "#f59e0b", [1.8, 1.7, 1.6, 1.5]);
+
+  const reviewTeams = document.getElementById("review-teams");
+  reviewTeams.innerHTML = teams.map(t => {
+    const members = developers.filter(d => d.team === t.id);
+    const prs = Math.round(members.reduce((s,d) => s + d.prs, 0) * scale);
+    const avgCycle = (members.reduce((s,d) => s + d.prCycle, 0) / members.length).toFixed(1);
+    return `<tr>
+      <td><span class="dot" style="background:${t.color}"></span><span style="color:${t.color}">${t.name}</span></td>
+      <td>${members.length}</td>
+      <td>${prs}</td>
+      <td>${avgCycle}d</td>
+    </tr>`;
+  }).join("");
+
+  // Dynamic Mini Bars Rendering (GitHub & Jira Weeks)
+  renderBars("gh-bars", "gh-bar-labels", generateWeeks(weeks), "#00ff88");
+  renderBars("jira-bars", "jira-bar-labels", generateWeeks(weeks), "#00c4ff");
+}
+
+function selectTeam(id) {
+  selectedTeam = id;
+  renderAll();
+}
+
+function generateWeeks(num) {
+  const result = [];
+  for (let i = num; i > 0; i--) {
+    result.push({ label: `W-${i}`, count: Math.round(4 + Math.random() * 12) });
+  }
+  return result;
+}
+
+function renderBars(containerId, labelId, data, color) {
+  const max = Math.max(...data.map(d => d.count), 1);
+  const wrap = document.getElementById(containerId);
+  const lbls = document.getElementById(labelId);
+  wrap.innerHTML = data.map(d => {
+    const h = Math.max(4, (d.count / max) * 40);
+    const op = 0.5 + 0.5 * (d.count / max);
+    return `<div class="bar-col"><div style="width:100%;border-radius:2px;height:${h}px;background:${color};opacity:${op};transition:height 0.5s"></div></div>`;
+  }).join("");
+  
+  // Show labels only for up to 10 weeks to prevent clutter
+  const labelStep = Math.max(1, Math.ceil(data.length / 8));
+  lbls.innerHTML = data.map((d, idx) => 
+    (idx % labelStep === 0) ? `<span class="mono" style="font-size:9px;color:rgba(255,255,255,0.15)">${d.label}</span>` : `<span style="width:20px"></span>`
+  ).join("");
+}
+
+// ── Initial Trigger ────────────────────────────────────────────────────────
+renderAll();
+</script>
+</body>
+</html>

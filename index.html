@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DevPulse — Live Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&display=swap" rel="stylesheet" />
+<style>
+  body { margin: 0; background: #080c12; color: #fff; font-family: 'DM Sans', sans-serif; overflow-x: hidden; }
+  .loader { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: monospace; letter-spacing: 0.15em; color: rgba(255,255,255,0.4); text-align: center; padding: 20px; }
+  .spinner { border: 2px solid rgba(255,255,255,0.05); border-top: 2px solid #00ff88; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; margin-bottom: 16px; }
+  @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  
+  .card-error {
+    background: rgba(255, 107, 107, 0.05);
+    border: 1px solid rgba(255, 107, 107, 0.25);
+    border-radius: 12px;
+    padding: 30px;
+    max-width: 550px;
+    text-align: left;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  }
+  .card-warning {
+    background: rgba(255, 107, 107, 0.05);
+    border: 1px solid rgba(255, 107, 107, 0.25);
+    border-radius: 12px;
+    padding: 30px;
+    max-width: 500px;
+    text-align: left;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  }
+  .btn-link {
+    display: inline-block;
+    background: #00ff88;
+    color: #080c12;
+    text-decoration: none;
+    font-weight: bold;
+    padding: 10px 20px;
+    border-radius: 6px;
+    margin-top: 15px;
+    font-family: monospace;
+    transition: background 0.2s;
+  }
+  .btn-link:hover {
+    background: #00dd77;
+  }
+</style>
+</head>
+<body>
+
+<div id="root">
+  <div class="loader">
+    <div class="spinner"></div>
+    COMPILING DEVPULSE REACT ENGINE...
+  </div>
+</div>
+
+<!-- ── Global Error Catching Layer ── -->
+<script>
+  // Catch any syntax, type, or loading errors before they halt silently
+  window.addEventListener('error', function(event) {
+    const errorMsg = event.error ? event.error.stack || event.error.message : event.message;
+    document.getElementById('root').innerHTML = `
+      <div class="loader">
+        <div class="card-error">
+          <div style="font-size: 11px; color: #ff6b6b; font-family: monospace; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 8px;">⚠️ Runtime Error Caught</div>
+          <h2 style="margin: 0 0 12px 0; font-size: 17px; font-weight: 700; color: #fff;">Javascript Exception</h2>
+          <pre style="margin: 0; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 6px; font-family: monospace; font-size: 11px; color: #ff8b8b; overflow-x: auto; white-space: pre-wrap; line-height: 1.5;">${errorMsg}</pre>
+          <p style="font-size: 12px; color: rgba(255,255,255,0.4); margin: 12px 0 0 0;">Location: ${event.filename || 'unknown'}:${event.lineno || 0}</p>
+        </div>
+      </div>
+    `;
+  });
+
+  // Catch any unhandled promise rejections
+  window.addEventListener('unhandledrejection', function(event) {
+    const reason = event.reason ? event.reason.stack || event.reason.message || event.reason : 'Unknown rejection';
+    document.getElementById('root').innerHTML = `
+      <div class="loader">
+        <div class="card-error">
+          <div style="font-size: 11px; color: #ff6b6b; font-family: monospace; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 8px;">⚠️ Promise Rejection Caught</div>
+          <h2 style="margin: 0 0 12px 0; font-size: 17px; font-weight: 700; color: #fff;">Unhandled Rejection</h2>
+          <pre style="margin: 0; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 6px; font-family: monospace; font-size: 11px; color: #ff8b8b; overflow-x: auto; white-space: pre-wrap; line-height: 1.5;">${reason}</pre>
+        </div>
+      </div>
+    `;
+  });
+</script>
+
+<!-- React and ReactDOM CDNs -->
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<!-- Babel Standalone CDN -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script>
+  // Detect if the file was opened directly via file:// protocol
+  if (window.location.protocol === 'file:') {
+    document.getElementById('root').innerHTML = `
+      <div class="loader">
+        <div class="card-warning">
+          <div style="font-size: 11px; color: #ff6b6b; font-family: monospace; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 8px;">⚡ Local Security Restriction (CORS)</div>
+          <h2 style="margin: 0 0 12px 0; font-size: 18px; font-weight: 700; color: #fff;">Open via Local Server</h2>
+          <p style="font-size: 13px; line-height: 1.6; color: rgba(255,255,255,0.6); margin: 0;">
+            Browsers block local <code>file://</code> paths from fetching sub-resources like the React dashboard and linking to your SQLite database.
+          </p>
+          <p style="font-size: 13px; line-height: 1.6; color: rgba(255,255,255,0.6); margin: 12px 0 0 0;">
+            Please open the live app through the active server URL:
+          </p>
+          <a href="http://localhost:3002/index.html" target="_blank" class="btn-link">http://localhost:3002/index.html</a>
+        </div>
+      </div>
+    `;
+  } else {
+    // Expose React hooks globally so dev-productivity.jsx works seamlessly without bundle imports
+    window.useState = React.useState;
+    window.useMemo = React.useMemo;
+    window.useEffect = React.useEffect;
+
+    // Fetch the JSX file, strip ESM imports, transpile JSX and run it!
+    fetch('dev-productivity.jsx')
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        return res.text();
+      })
+      .then(code => {
+        // Strip standard ES imports and exports so Babel Standalone can compile and run as a native inline script block
+        const strippedCode = code
+          .replace(/import\s+{[^}]+}\s+from\s+['"]react['"];?/g, '')
+          .replace(/export\s+default\s+/g, '');
+        
+        // Transpile JSX on the fly (super fast, under 50ms)
+        const compiled = Babel.transform(strippedCode, {
+          presets: ['react']
+        }).code;
+        
+        // Inject and run the compiled React app
+        const script = document.createElement('script');
+        script.text = compiled;
+        document.body.appendChild(script);
+        
+        // Render the root component once it binds to window.DevPulseApp
+        const checkInterval = setInterval(() => {
+          if (window.DevPulseApp) {
+            clearInterval(checkInterval);
+            const root = ReactDOM.createRoot(document.getElementById('root'));
+            root.render(React.createElement(window.DevPulseApp));
+          }
+        }, 20);
+      })
+      .catch(err => {
+        console.error("Compilation failed:", err);
+        document.getElementById('root').innerHTML = `
+          <div class="loader">
+            <div class="card-error">
+              <div style="font-size: 11px; color: #ff6b6b; font-family: monospace; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 8px;">⚠️ Compilation Error</div>
+              <h2 style="margin: 0 0 12px 0; font-size: 17px; font-weight: 700; color: #fff;">Babel Transpiler Failed</h2>
+              <pre style="margin: 0; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 6px; font-family: monospace; font-size: 11px; color: #ff8b8b; overflow-x: auto; white-space: pre-wrap; line-height: 1.5;">${err.stack || err.message || err}</pre>
+            </div>
+          </div>
+        `;
+      });
+  }
+</script>
+
+</body>
+</html>
