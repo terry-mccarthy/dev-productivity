@@ -859,11 +859,15 @@ function SecurityTab() {
   const [detailView, setDetailView] = useState(null); // null (timeline) | { type: 'repo', data } | { type: 'day', data }
   const [detailLoading, setDetailLoading] = useState(false);
 
-  useEffect(() => {
+  const loadWorkspaces = () => {
     fetch(`${API_BASE}/api/security/workspaces`)
       .then(r => r.json())
       .then(d => { setWorkspaces(d.repos || []); setWsLoading(false); })
       .catch(() => setWsLoading(false));
+  };
+
+  useEffect(() => {
+    loadWorkspaces();
     loadSummary();
   }, []);
 
@@ -935,6 +939,7 @@ function SecurityTab() {
                 setScanAllState("done");
                 setScanAllProgress(null);
                 loadSummary();
+                loadWorkspaces();
               } else if (msg.stage === "error") {
                 setScanAllState("error");
               }
