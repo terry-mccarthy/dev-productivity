@@ -72,7 +72,29 @@ db.run(`
     jira_id  TEXT NOT NULL,
     PRIMARY KEY (team_id, jira_id)
   );
+
+  CREATE TABLE IF NOT EXISTS security_scans (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_path   TEXT NOT NULL,
+    repo_name   TEXT NOT NULL,
+    scanned_at  INTEGER NOT NULL,
+    total       INTEGER DEFAULT 0,
+    critical    INTEGER DEFAULT 0,
+    high        INTEGER DEFAULT 0,
+    medium      INTEGER DEFAULT 0,
+    secrets     INTEGER DEFAULT 0,
+    history     INTEGER DEFAULT 0,
+    deps        INTEGER DEFAULT 0,
+    bumblebee   INTEGER DEFAULT 0,
+    osv         INTEGER DEFAULT 0
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_security_scans_scanned_at ON security_scans(scanned_at);
+  CREATE INDEX IF NOT EXISTS idx_security_scans_repo ON security_scans(repo_path, scanned_at);
 `);
+
+try { db.run(`ALTER TABLE security_scans ADD COLUMN findings TEXT DEFAULT '[]'`); } catch {}
+
 save();
 
 // Helper to convert SQL.js result array of objects to readable object arrays
@@ -297,6 +319,71 @@ export function queryTrends(org, repo, project, grain, periods) {
 
     return { label, start, end, github: gh, jira: ji };
   }).reverse();
+}
+
+// ── Security scan helpers ────────────────────────────────────────────────────
+export function insertSecurityScan(row) {
+  const stmt = db.prepare(`
+    INSERT INTO security_scans
+      (repo_path, repo_name, scanned_at, total, critical, high, medium, secrets, history, deps, bumblebee, osv, findings)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmt.run([row.repo_path, row.repo_name, row.scanned_at, row.total, row.critical, row.high, row.medium, row.secrets, row.history, row.deps, row.bumblebee, row.osv, JSON.stringify(row.findings || [])]);
+  stmt.free();
+  save();
+}
+
+export function getLatestScan(repoPath) {
+  const row = execGet(`SELECT * FROM security_scans WHERE repo_path=? ORDER BY scanned_at DESC LIMIT 1`, [repoPath]);
+  if (row && row.findings) {
+    try { row.findings = JSON.parse(row.findings); } catch { row.findings = []; }
+  }
+  return row;
+}
+
+export function getAllLatestScans() {
+  return execAll(`
+    SELECT s.* FROM security_scans s
+    INNER JOIN (
+      SELECT repo_path, MAX(scanned_at) as max_at
+      FROM security_scans GROUP BY repo_path
+    ) latest ON s.repo_path = latest.repo_path AND s.scanned_at = latest.max_at
+  `);
+}
+
+export function getRepoScanHistory(repoPath, days = 90) {
+  const since = Date.now() - days * 86400000;
+  return execAll(`SELECT * FROM security_scans WHERE repo_path=? AND scanned_at>=? ORDER BY scanned_at DESC`, [repoPath, since]);
+}
+
+export function getScansAtTime(scannedAt) {
+  return execAll(`SELECT * FROM security_scans WHERE scanned_at BETWEEN ? AND ? + 86400000 ORDER BY repo_name`, [scannedAt, scannedAt]);
+}
+
+export function getSecurityScanHistory(days = 30) {
+  const since = Date.now() - days * 86400000;
+  return execAll(`
+    SELECT MIN(s.scanned_at) as scanned_at,
+           SUM(s.total) as total,
+           SUM(s.critical) as critical,
+           SUM(s.high) as high,
+           SUM(s.medium) as medium,
+           SUM(s.secrets) as secrets,
+           SUM(s.history) as history,
+           SUM(s.deps) as deps,
+           SUM(s.bumblebee) as bumblebee,
+           SUM(s.osv) as osv,
+           COUNT(*) as repos_scanned
+    FROM security_scans s
+    INNER JOIN (
+      SELECT repo_path, scanned_at / 86400000 as day, MAX(scanned_at) as max_at
+      FROM security_scans
+      WHERE scanned_at >= ?
+      GROUP BY repo_path, day
+    ) t ON s.repo_path = t.repo_path AND s.scanned_at = t.max_at
+    GROUP BY t.day
+    ORDER BY t.day ASC
+  `, [since]);
 }
 
 export default db;

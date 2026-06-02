@@ -6,7 +6,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "test": "node --test security.test.js db.test.js api.test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

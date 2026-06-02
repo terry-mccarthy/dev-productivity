@@ -76,26 +76,50 @@ async function enrichWithReviewTimes(token, org, repo, prs) {
   return result;
 }
 
+async function listOrgRepos(token, org) {
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+  // Try org endpoint first, fall back to user endpoint
+  for (const url of [
+    `https://api.github.com/orgs/${org}/repos?per_page=100&sort=pushed&direction=desc`,
+    `https://api.github.com/users/${org}/repos?per_page=100&sort=pushed&direction=desc`,
+  ]) {
+    const res = await fetch(url, { headers });
+    if (res.ok) {
+      const data = await res.json();
+      return data.map(r => r.name);
+    }
+  }
+  throw new Error(`Could not list repos for ${org}`);
+}
+
 /**
  * Main export: fetch and transform all PRs into DB-ready rows.
+ * If repo is empty, discovers all repos in the org automatically.
  */
 export async function fetchGitHubEvents(token, org, repo, cutoffDate) {
-  console.log(`[github] Fetching PRs for ${org}/${repo} since ${cutoffDate.toISOString()}`);
-  const prs = await fetchAllMergedPRs(token, org, repo, cutoffDate);
-  console.log(`[github] Found ${prs.length} merged PRs — fetching review times…`);
+  const repos = repo ? [repo] : await listOrgRepos(token, org);
+  console.log(`[github] Syncing ${repos.length} repo(s) for ${org} since ${cutoffDate.toISOString()}`);
 
-  const reviewMap = await enrichWithReviewTimes(token, org, repo, prs);
-  const now = Date.now();
-
-  return prs.map(pr => ({
-    id:               `${org}/${repo}#${pr.number}`,
-    org,
-    repo,
-    author:           pr.user?.login || 'unknown',
-    created_at:       new Date(pr.created_at).getTime(),
-    merged_at:        new Date(pr.merged_at).getTime(),
-    cycle_time_days:  daysBetween(pr.created_at, pr.merged_at),
-    review_time_days: reviewMap.get(pr.number) ?? null,
-    synced_at:        now,
-  }));
+  const allRows = [];
+  for (const r of repos) {
+    const prs = await fetchAllMergedPRs(token, org, r, cutoffDate);
+    if (!prs.length) continue;
+    console.log(`[github] ${r}: ${prs.length} merged PRs`);
+    const reviewMap = await enrichWithReviewTimes(token, org, r, prs);
+    const now = Date.now();
+    for (const pr of prs) {
+      allRows.push({
+        id:               `${org}/${r}#${pr.number}`,
+        org,
+        repo:             r,
+        author:           pr.user?.login || 'unknown',
+        created_at:       new Date(pr.created_at).getTime(),
+        merged_at:        new Date(pr.merged_at).getTime(),
+        cycle_time_days:  daysBetween(pr.created_at, pr.merged_at),
+        review_time_days: reviewMap.get(pr.number) ?? null,
+        synced_at:        now,
+      });
+    }
+  }
+  return allRows;
 }

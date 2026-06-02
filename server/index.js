@@ -1,14 +1,23 @@
 import express from 'express';
 import cors from 'cors';
-import { join, dirname } from 'path';
+import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
-import { getConfig, setConfig, upsertPRs, upsertIssues, getMappings, saveMappings, queryMetrics, queryTrends } from './db.js';
+import { appendFileSync } from 'fs';
+import { getConfig, setConfig, upsertPRs, upsertIssues, getMappings, saveMappings, queryMetrics, queryTrends, insertSecurityScan, getAllLatestScans, getLatestScan, getRepoScanHistory, getScansAtTime, getSecurityScanHistory } from './db.js';
 import { fetchGitHubEvents } from './github.js';
 import { fetchJiraEvents }   from './jira.js';
+import { findGitRepos, repoMeta, scanFileSecrets, scanGitHistory, scanDependencies, scanBumblebee, scanOsv, runFullScan } from './security.js';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const app  = express();
-const PORT = 3002;
+const PORT = parseInt(process.env.PORT) || 3002;
+const LOG_FILE = join(__dir, 'devpulse.log');
+
+function log(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  try { appendFileSync(LOG_FILE, line); } catch {}
+  console.log(msg);
+}
 
 app.use(cors());
 app.use(express.json());
@@ -18,7 +27,7 @@ app.use(express.static(join(__dir, '..')));
 // Returns stored config with tokens redacted (just confirms what's saved)
 app.get('/api/config', (req, res) => {
   const cfg = getConfig();
-  const hasConfig = !!(cfg.gh_token && cfg.jira_token);
+  const hasConfig = !!(cfg.gh_token && cfg.gh_org && cfg.gh_repo);
   res.json({
     hasConfig,
     gh:   { org: cfg.gh_org   || '', repo: cfg.gh_repo   || '' },
@@ -31,17 +40,17 @@ app.get('/api/config', (req, res) => {
 // Save connection details (tokens stored server-side only)
 app.post('/api/config', (req, res) => {
   const { gh, jira } = req.body;
-  if (!gh?.token || !gh?.org || !gh?.repo || !jira?.token || !jira?.email || !jira?.domain || !jira?.project) {
-    return res.status(400).json({ error: 'Missing required fields' });
+  if (!gh?.token || !gh?.org || !gh?.repo) {
+    return res.status(400).json({ error: 'Missing required GitHub fields' });
   }
   setConfig({
     gh_token:      gh.token,
     gh_org:        gh.org,
     gh_repo:       gh.repo,
-    jira_token:    jira.token,
-    jira_email:    jira.email,
-    jira_domain:   jira.domain,
-    jira_project:  jira.project,
+    jira_token:    jira?.token    || '',
+    jira_email:    jira?.email    || '',
+    jira_domain:   jira?.domain   || '',
+    jira_project:  jira?.project  || '',
   });
   res.json({ ok: true });
 });
@@ -55,7 +64,7 @@ app.post('/api/sync', async (req, res) => {
   if (syncInProgress) return res.status(409).json({ error: 'Sync already in progress' });
 
   const cfg = getConfig();
-  if (!cfg.gh_token || !cfg.jira_token) {
+  if (!cfg.gh_token) {
     return res.status(400).json({ error: 'Not configured — POST /api/config first' });
   }
 
@@ -74,10 +83,14 @@ app.post('/api/sync', async (req, res) => {
     upsertPRs(prRows);
     send({ stage: 'github', message: `Stored ${prRows.length} PR events` });
 
-    send({ stage: 'jira', message: 'Fetching Jira issues…' });
-    const issueRows = await fetchJiraEvents(cfg.jira_token, cfg.jira_email, cfg.jira_domain, cfg.jira_project, cutoff);
-    upsertIssues(issueRows);
-    send({ stage: 'jira', message: `Stored ${issueRows.length} issue events` });
+    if (cfg.jira_token && cfg.jira_domain && cfg.jira_project) {
+      send({ stage: 'jira', message: 'Fetching Jira issues…' });
+      const issueRows = await fetchJiraEvents(cfg.jira_token, cfg.jira_email, cfg.jira_domain, cfg.jira_project, cutoff);
+      upsertIssues(issueRows);
+      send({ stage: 'jira', message: `Stored ${issueRows.length} issue events` });
+    } else {
+      send({ stage: 'jira', message: 'Jira not configured — skipping' });
+    }
 
     setConfig({ last_synced: Date.now().toString() });
     send({ stage: 'done', message: 'Sync complete' });
@@ -156,14 +169,191 @@ app.get('/api/users', async (req, res) => {
   res.json({ error: 'Use /api/mappings to retrieve user data' });
 });
 
-app.listen(PORT, () => {
-  console.log(`\n🚀 DevPulse server running at http://localhost:${PORT}`);
-  console.log(`   Database: devpulse.db`);
-  const cfg = getConfig();
-  if (cfg.gh_org) {
-    console.log(`   Connected: ${cfg.gh_org}/${cfg.gh_repo} · ${cfg.jira_project}`);
-    console.log(`   Last synced: ${cfg.last_synced ? new Date(parseInt(cfg.last_synced)).toLocaleString() : 'never'}`);
-  } else {
-    console.log(`   Not configured yet — open the app to connect\n`);
+// ── GET /api/security/workspaces ────────────────────────────────────────────
+// Auto-detect git repos from common locations on disk
+app.get('/api/security/workspaces', (req, res) => {
+  try {
+    const paths = findGitRepos();
+    const repos = paths.map(repoMeta);
+    res.json({ repos });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
+
+// ── POST /api/security/scan ──────────────────────────────────────────────────
+// Body: { path }  —  streams SSE findings for secrets, git history, and deps
+app.post('/api/security/scan', (req, res) => {
+  const { path: scanPath } = req.body;
+  if (!scanPath) return res.status(400).json({ error: 'path required' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  const send = (msg) => res.write(`data: ${JSON.stringify(msg)}\n\n`);
+
+  try {
+    send({ stage: 'secrets', message: 'Scanning source files for secrets…' });
+    const secrets = scanFileSecrets(scanPath);
+    send({ stage: 'secrets_done', count: secrets.length, findings: secrets });
+
+    send({ stage: 'history', message: 'Scanning git history…' });
+    const history = scanGitHistory(scanPath);
+    send({ stage: 'history_done', count: history.length, findings: history });
+
+    send({ stage: 'deps', message: 'Auditing dependencies…' });
+    const deps = scanDependencies(scanPath);
+    send({ stage: 'deps_done', count: deps.length, findings: deps });
+
+    send({ stage: 'bumblebee', message: 'Scanning installed packages for supply chain threats…' });
+    const { findings: bumblebeeFindings, pkgCount } = scanBumblebee(scanPath);
+    send({ stage: 'bumblebee_done', count: bumblebeeFindings.length, pkgCount, findings: bumblebeeFindings });
+
+    send({ stage: 'osv', message: 'Scanning lockfile for CVEs…' });
+    const { findings: osvFindings, scanned } = scanOsv(scanPath);
+    send({ stage: 'osv_done', count: osvFindings.length, scanned, findings: osvFindings });
+
+    const allFindings = [...secrets, ...history, ...deps, ...bumblebeeFindings, ...osvFindings];
+    const sev = { critical: 0, high: 0, medium: 0 };
+    for (const f of allFindings) {
+      const s = f.severity === 'critical' ? 'critical' : f.severity === 'high' ? 'high' : 'medium';
+      sev[s]++;
+    }
+    insertSecurityScan({
+      repo_path: scanPath,
+      repo_name: basename(scanPath),
+      scanned_at: Date.now(),
+      total: allFindings.length,
+      critical: sev.critical,
+      high: sev.high,
+      medium: sev.medium,
+      secrets: secrets.length,
+      history: history.length,
+      deps: deps.length,
+      bumblebee: bumblebeeFindings.length,
+      osv: osvFindings.length,
+      findings: allFindings,
+    });
+
+    send({ stage: 'done', message: 'Scan complete' });
+    res.end();
+  } catch (err) {
+    send({ stage: 'error', message: err.message });
+    res.end();
+  }
+});
+
+// ── POST /api/security/scan-all ──────────────────────────────────────────────
+// Scans all detected repos, stores results in DB, returns summary
+app.post('/api/security/scan-all', async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  const send = (msg) => res.write(`data: ${JSON.stringify(msg)}\n\n`);
+
+  try {
+    const paths = findGitRepos();
+    const results = [];
+
+    log(`Scan-all: found ${paths.length} repos`);
+
+    const batchScannedAt = Date.now();
+
+    for (let i = 0; i < paths.length; i++) {
+      const name = basename(paths[i]);
+      log(`Scan-all [${i + 1}/${paths.length}]: ${name} — secrets`);
+      send({ stage: 'progress', current: i + 1, total: paths.length, repo: name, subStage: 'secrets' });
+      const result = runFullScan(paths[i], (subStage) => {
+        log(`Scan-all [${i + 1}/${paths.length}]: ${name} — ${subStage}`);
+        send({ stage: 'progress', current: i + 1, total: paths.length, repo: name, subStage });
+      });
+      result.scanned_at = batchScannedAt;
+      insertSecurityScan(result);
+      results.push(result);
+      log(`Scan-all [${i + 1}/${paths.length}]: ${name} — done (${result.total} findings, ${result.critical} critical, ${result.high} high)`);
+    }
+
+    send({ stage: 'done', count: results.length, results });
+    res.end();
+    log(`Scan-all: all ${paths.length} repos complete — ${results.reduce((s, r) => s + r.total, 0)} total findings`);
+  } catch (err) {
+    log(`Scan-all ERROR: ${err.message}`);
+    send({ stage: 'error', message: err.message });
+    res.end();
+  }
+});
+
+// ── GET /api/security/history ────────────────────────────────────────────────
+// Returns latest per-repo summaries + trend data
+app.get('/api/security/history', (req, res) => {
+  try {
+    const latest = getAllLatestScans();
+    const trends = getSecurityScanHistory(30);
+    const total = latest.reduce((a, r) => a + r.total, 0);
+    const critical = latest.reduce((a, r) => a + r.critical, 0);
+    const high = latest.reduce((a, r) => a + r.high, 0);
+    const medium = latest.reduce((a, r) => a + r.medium, 0);
+    res.json({ latest, trends, summary: { total, critical, high, medium, repos: latest.length } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/security/findings?repoPath=<path>[&severity=medium] ───────────
+// Returns findings for the latest scan of a repo, optionally filtered by severity
+app.get('/api/security/findings', (req, res) => {
+  try {
+    const repoPath = req.query.repoPath;
+    if (!repoPath) return res.status(400).json({ error: 'repoPath query param required' });
+    const severity = req.query.severity || null;
+    const latest = getLatestScan(repoPath);
+    if (!latest) return res.json({ findings: [] });
+    const findings = Array.isArray(latest.findings) ? latest.findings : [];
+    const filtered = severity ? findings.filter(f => f.severity === severity) : findings;
+    res.json({ repoPath, findings: filtered });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/security/repo/:repoPath* ──────────────────────────────────────
+// Returns latest scan + scan history for a specific repo
+app.get('/api/security/repo/*', (req, res) => {
+  try {
+    const repoPath = decodeURIComponent(req.params[0]);
+    const latest = getLatestScan(repoPath);
+    const history = getRepoScanHistory(repoPath);
+    res.json({ repoPath, latest, history });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/security/scans-at?scanned_at=<ms> ────────────────────────────
+// Returns all repos scanned at a given timestamp
+app.get('/api/security/scans-at', (req, res) => {
+  try {
+    const scannedAt = parseInt(req.query.scanned_at);
+    if (isNaN(scannedAt)) return res.status(400).json({ error: 'scanned_at query param required' });
+    const scans = getScansAtTime(scannedAt);
+    res.json({ scannedAt, scans });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  app.listen(PORT, () => {
+    log(`DevPulse server running at http://localhost:${PORT}`);
+    log(`Database: devpulse.db`);
+    log(`Log file: ${LOG_FILE}`);
+    const cfg = getConfig();
+    if (cfg.gh_org) {
+      log(`Connected: ${cfg.gh_org}/${cfg.gh_repo} · ${cfg.jira_project}`);
+      log(`Last synced: ${cfg.last_synced ? new Date(parseInt(cfg.last_synced)).toLocaleString() : 'never'}`);
+    } else {
+      log(`Not configured yet — open the app to connect`);
+    }
+  });
+}
+
+export default app;
