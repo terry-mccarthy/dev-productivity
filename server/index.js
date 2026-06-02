@@ -40,7 +40,7 @@ app.get('/api/config', (req, res) => {
 // Save connection details (tokens stored server-side only)
 app.post('/api/config', (req, res) => {
   const { gh, jira } = req.body;
-  if (!gh?.token || !gh?.org || !gh?.repo) {
+  if (!gh?.token || !gh?.org) {
     return res.status(400).json({ error: 'Missing required GitHub fields' });
   }
   setConfig({
