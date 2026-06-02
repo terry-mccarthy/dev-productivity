@@ -1,6 +1,6 @@
 import { writeFileSync } from 'fs';
 
-const TEST_URL = 'http://localhost:3002';
+const TEST_URL = process.env.TEST_URL || 'http://localhost:3003';
 
 async function runTests() {
   console.log('🧪 Starting DevPulse Self-Testing Suite...\n');
