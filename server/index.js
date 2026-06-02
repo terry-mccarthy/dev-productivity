@@ -6,12 +6,12 @@ import { appendFileSync } from 'fs';
 import { getConfig, setConfig, upsertPRs, upsertIssues, getMappings, saveMappings, queryMetrics, queryTrends, insertSecurityScan, getAllLatestScans, getLatestScan, getRepoScanHistory, getScansAtTime, getSecurityScanHistory } from './db.js';
 import { fetchGitHubEvents } from './github.js';
 import { fetchJiraEvents }   from './jira.js';
-import { findGitRepos, repoMeta, scanFileSecrets, scanGitHistory, scanDependencies, scanBumblebee, scanOsv, runFullScan } from './security.js';
+import { findGitRepos, repoMeta, scanFileSecrets, scanGitHistory, scanDependencies, scanBumblebee, scanLocalThreatIntel, scanOsv, runFullScan } from './security.js';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const app  = express();
-const PORT = parseInt(process.env.PORT) || 3002;
-const LOG_FILE = join(__dir, 'devpulse.log');
+const PORT = parseInt(process.env.PORT) || 3003;
+const LOG_FILE = process.env.LOG_FILE || join(__dir, 'devpulse.log');
 
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
@@ -169,12 +169,18 @@ app.get('/api/users', async (req, res) => {
   res.json({ error: 'Use /api/mappings to retrieve user data' });
 });
 
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 // ── GET /api/security/workspaces ────────────────────────────────────────────
 // Auto-detect git repos from common locations on disk
 app.get('/api/security/workspaces', (req, res) => {
   try {
     const paths = findGitRepos();
-    const repos = paths.map(repoMeta);
+    const repos = paths.map(p => {
+      const meta = repoMeta(p);
+      const scan = getLatestScan(p);
+      return { ...meta, security: scan ? { total: scan.total, critical: scan.critical, high: scan.high, medium: scan.medium } : null };
+    });
     res.json({ repos });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -208,11 +214,15 @@ app.post('/api/security/scan', (req, res) => {
     const { findings: bumblebeeFindings, pkgCount } = scanBumblebee(scanPath);
     send({ stage: 'bumblebee_done', count: bumblebeeFindings.length, pkgCount, findings: bumblebeeFindings });
 
+    send({ stage: 'local_threat_intel', message: 'Checking packages against local threat intelligence…' });
+    const localThreatFindings = scanLocalThreatIntel(scanPath);
+    send({ stage: 'local_threat_intel_done', count: localThreatFindings.length, findings: localThreatFindings });
+
     send({ stage: 'osv', message: 'Scanning lockfile for CVEs…' });
     const { findings: osvFindings, scanned } = scanOsv(scanPath);
     send({ stage: 'osv_done', count: osvFindings.length, scanned, findings: osvFindings });
 
-    const allFindings = [...secrets, ...history, ...deps, ...bumblebeeFindings, ...osvFindings];
+    const allFindings = [...secrets, ...history, ...deps, ...bumblebeeFindings, ...localThreatFindings, ...osvFindings];
     const sev = { critical: 0, high: 0, medium: 0 };
     for (const f of allFindings) {
       const s = f.severity === 'critical' ? 'critical' : f.severity === 'high' ? 'high' : 'medium';
@@ -230,6 +240,7 @@ app.post('/api/security/scan', (req, res) => {
       history: history.length,
       deps: deps.length,
       bumblebee: bumblebeeFindings.length,
+      local_threat_intel: localThreatFindings.length,
       osv: osvFindings.length,
       findings: allFindings,
     });

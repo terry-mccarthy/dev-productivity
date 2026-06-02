@@ -4,7 +4,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
-const dbPath = join(__dir, '..', 'devpulse.db');
+const dbPath = process.env.DB_PATH || join(__dir, '..', 'devpulse.db');
 
 // Initialize WebAssembly SQL.js
 const SQL = await initSqlJs();

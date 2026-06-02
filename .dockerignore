@@ -1,0 +1,6 @@
+server/node_modules
+devpulse.db
+server/devpulse.log
+*.log
+.env
+docker-compose.override.yml

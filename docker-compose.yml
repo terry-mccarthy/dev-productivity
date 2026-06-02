@@ -1,0 +1,17 @@
+services:
+  devpulse:
+    build: .
+    ports:
+      - "3003:3003"
+    volumes:
+      - devpulse-data:/data
+      - ./server/threat-intel:/app/server/threat-intel:ro
+    environment:
+      PORT: "3003"
+      DB_PATH: /data/devpulse.db
+      THREAT_INTEL_DIR: /app/server/threat-intel
+      # LOG_FILE: /data/devpulse.log
+    restart: unless-stopped
+
+volumes:
+  devpulse-data:

@@ -1,0 +1,8 @@
+services:
+  devpulse:
+    volumes:
+      - /your/repos:/repos:ro
+      - /your/bumblebee/threat_intel:/bumblebee-intel:ro
+    environment:
+      REPO_ROOTS: /repos
+      BUMBLEBEE_THREAT_INTEL_PATH: /bumblebee-intel
