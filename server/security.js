@@ -85,6 +85,24 @@ export function findGitRepos(roots = null) {
   return [...new Set(found)].slice(0, 150);
 }
 
+function loadIgnorePatterns(repoPath) {
+  try {
+    const text = readFileSync(join(repoPath, '.devpulseignore'), 'utf8');
+    return text.split('\n')
+      .map(l => l.trim())
+      .filter(l => l && !l.startsWith('#'));
+  } catch {
+    return [];
+  }
+}
+
+function isIgnored(relPath, patterns) {
+  return patterns.some(p => {
+    const norm = p.endsWith('/') ? p : p;
+    return relPath === p || relPath.startsWith(p.endsWith('/') ? p : p + '/');
+  });
+}
+
 function redact(str) {
   if (!str || str.length < 6) return '***';
   return str.slice(0, 3) + '•'.repeat(Math.min(str.length - 5, 10)) + str.slice(-2);
@@ -105,11 +123,14 @@ function checkLine(line, lineNum, relPath, out) {
 
 export function scanFileSecrets(repoPath) {
   const findings = [];
+  const ignorePatterns = loadIgnorePatterns(repoPath);
 
   function walk(dir) {
     let entries;
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
+      const relPath = relative(repoPath, join(dir, e.name));
+      if (isIgnored(relPath, ignorePatterns)) continue;
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name)) walk(join(dir, e.name));
         continue;
@@ -119,9 +140,9 @@ export function scanFileSecrets(repoPath) {
       if (!SCAN_EXTS.has(ext) && !isEnvFile) continue;
       const full = join(dir, e.name);
       try {
-        if (statSync(full).size > 512 * 1024) continue; // skip > 512 KB
+        if (statSync(full).size > 512 * 1024) continue;
         const text = readFileSync(full, 'utf8');
-        text.split('\n').forEach((ln, i) => checkLine(ln, i + 1, relative(repoPath, full), findings));
+        text.split('\n').forEach((ln, i) => checkLine(ln, i + 1, relPath, findings));
       } catch {}
     }
   }
@@ -132,6 +153,7 @@ export function scanFileSecrets(repoPath) {
 
 export function scanGitHistory(repoPath) {
   const findings = [];
+  const ignorePatterns = loadIgnorePatterns(repoPath);
   const r = spawnSync(
     'git', ['log', '--all', '-p', '-n', '300', '--pretty=format:%H', '--no-merges'],
     { cwd: repoPath, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024, timeout: 45000 },
@@ -143,6 +165,7 @@ export function scanGitHistory(repoPath) {
     if (/^[0-9a-f]{40}$/.test(line.trim())) { commit = line.trim().slice(0, 8); continue; }
     if (line.startsWith('+++ b/')) { file = line.slice(6); continue; }
     if (!line.startsWith('+') || line.startsWith('+++')) continue;
+    if (isIgnored(file, ignorePatterns)) continue;
     const content = line.slice(1);
     for (const { name, pattern, severity } of SECRET_PATTERNS) {
       const m = pattern.exec(content);
