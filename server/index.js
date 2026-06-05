@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
-import { appendFileSync } from 'fs';
+import { appendFileSync, writeFileSync, mkdirSync } from 'fs';
 import { getConfig, setConfig, upsertPRs, upsertIssues, getMappings, saveMappings, queryMetrics, queryTrends, insertSecurityScan, getAllLatestScans, getLatestScan, getRepoScanHistory, getScansAtTime, getSecurityScanHistory } from './db.js';
 import { fetchGitHubEvents } from './github.js';
 import { fetchJiraEvents }   from './jira.js';
@@ -324,6 +324,43 @@ app.get('/api/security/repo/*', (req, res) => {
     const history = getRepoScanHistory(repoPath);
     res.json({ repoPath, latest, history });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/security/update-threat-intel ───────────────────────────────────
+// Downloads all JSON feeds from perplexityai/bumblebee/threat_intel and writes
+// them to the local threat-intel directory so they're picked up on the next scan.
+app.post('/api/security/update-threat-intel', async (req, res) => {
+  const GITHUB_API = 'https://api.github.com/repos/perplexityai/bumblebee/contents/threat_intel';
+  const cfg = getConfig();
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'devpulse' };
+  if (cfg.gh_token) headers['Authorization'] = `Bearer ${cfg.gh_token}`;
+
+  try {
+    const listRes = await fetch(GITHUB_API, { headers });
+    if (!listRes.ok) {
+      return res.status(502).json({ error: `GitHub API ${listRes.status}: ${listRes.statusText}` });
+    }
+    const entries = await listRes.json();
+    const jsonFiles = entries.filter(e => e.type === 'file' && e.name.endsWith('.json'));
+
+    const threatIntelDir = process.env.THREAT_INTEL_DIR || join(__dir, 'threat-intel');
+    mkdirSync(threatIntelDir, { recursive: true });
+
+    const downloaded = [];
+    for (const file of jsonFiles) {
+      const contentRes = await fetch(file.download_url);
+      if (!contentRes.ok) continue;
+      const text = await contentRes.text();
+      writeFileSync(join(threatIntelDir, file.name), text, 'utf8');
+      downloaded.push(file.name);
+    }
+
+    log(`Threat intel updated: ${downloaded.length} feeds from perplexityai/bumblebee`);
+    res.json({ updated: downloaded.length, files: downloaded });
+  } catch (err) {
+    log(`Threat intel update failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

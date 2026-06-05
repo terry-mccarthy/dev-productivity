@@ -854,6 +854,8 @@ function SecurityTab() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [scanAllState, setScanAllState] = useState(null);
   const [scanAllProgress, setScanAllProgress] = useState(null);
+  const [threatIntelState, setThreatIntelState] = useState(null); // null | "updating" | "done" | "error"
+  const [threatIntelResult, setThreatIntelResult] = useState(null);
 
   // Navigation state — right panel shows timeline, repo detail, or day detail
   const [detailView, setDetailView] = useState(null); // null (timeline) | { type: 'repo', data } | { type: 'day', data }
@@ -949,6 +951,23 @@ function SecurityTab() {
       }
     } catch {
       setScanAllState("error");
+    }
+  };
+
+  const updateThreatIntel = async () => {
+    setThreatIntelState("updating");
+    setThreatIntelResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/security/update-threat-intel`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      setThreatIntelResult(data);
+      setThreatIntelState("done");
+      setTimeout(() => setThreatIntelState(null), 4000);
+    } catch (e) {
+      setThreatIntelResult({ error: e.message });
+      setThreatIntelState("error");
+      setTimeout(() => setThreatIntelState(null), 5000);
     }
   };
 
@@ -1050,6 +1069,24 @@ function SecurityTab() {
               {scanAllProgress.subStage && ` · ${SUB_STAGE_LABELS[scanAllProgress.subStage] || scanAllProgress.subStage}`}
             </span>
           )}
+          {threatIntelState === "done" && threatIntelResult && (
+            <span style={{ fontSize:11, color:"#a78bfa", fontFamily:"monospace" }}>
+              ✓ {threatIntelResult.updated} feed{threatIntelResult.updated !== 1 ? "s" : ""} updated
+            </span>
+          )}
+          {threatIntelState === "error" && threatIntelResult && (
+            <span style={{ fontSize:11, color:"#ff4444", fontFamily:"monospace" }}>
+              ✗ {threatIntelResult.error}
+            </span>
+          )}
+          <button
+            onClick={updateThreatIntel}
+            disabled={threatIntelState === "updating"}
+            title="Download latest threat intel feeds from perplexityai/bumblebee"
+            style={{ background:"rgba(167,139,250,0.09)", border:"1px solid rgba(167,139,250,0.22)", borderRadius:6, padding:"7px 14px", color:"#a78bfa", fontSize:11, fontFamily:"monospace", cursor:"pointer", fontWeight:700, letterSpacing:"0.04em" }}
+          >
+            {threatIntelState === "updating" ? "⏳ UPDATING…" : "⬇ UPDATE THREAT INTEL"}
+          </button>
           <button
             onClick={startScanAll}
             disabled={scanAllState === "scanning"}
