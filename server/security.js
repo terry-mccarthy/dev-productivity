@@ -97,10 +97,7 @@ function loadIgnorePatterns(repoPath) {
 }
 
 function isIgnored(relPath, patterns) {
-  return patterns.some(p => {
-    const norm = p.endsWith('/') ? p : p;
-    return relPath === p || relPath.startsWith(p.endsWith('/') ? p : p + '/');
-  });
+  return patterns.some(p => relPath === p || relPath.startsWith(p.endsWith('/') ? p : p + '/'));
 }
 
 function redact(str) {

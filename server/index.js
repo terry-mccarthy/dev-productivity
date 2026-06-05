@@ -159,16 +159,6 @@ app.post('/api/mappings', (req, res) => {
   }
 });
 
-// ── GET /api/users ──────────────────────────────────────────────────────────
-// Returns distinct GitHub authors and Jira assignees from stored events
-app.get('/api/users', async (req, res) => {
-  const cfg = getConfig();
-  if (!cfg.gh_org) return res.status(400).json({ error: 'Not configured' });
-
-  const { default: db } = await import('./db.js').catch(() => ({ default: null }));
-  res.json({ error: 'Use /api/mappings to retrieve user data' });
-});
-
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // ── GET /api/security/workspaces ────────────────────────────────────────────

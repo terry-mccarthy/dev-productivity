@@ -184,4 +184,15 @@ describe('security scans CRUD', () => {
     assert.equal(latest.critical, 5);
     assert.equal(latest.scanned_at, newerScan.scanned_at);
   });
+
+  it('persists local_threat_intel count', () => {
+    const scanWithLTI = {
+      ...testScan,
+      scanned_at: testScan.scanned_at + 2000,
+      local_threat_intel: 3,
+    };
+    insertSecurityScan(scanWithLTI);
+    const latest = getLatestScan(testScan.repo_path);
+    assert.equal(latest.local_threat_intel, 3);
+  });
 });

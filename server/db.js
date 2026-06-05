@@ -74,19 +74,20 @@ db.run(`
   );
 
   CREATE TABLE IF NOT EXISTS security_scans (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    repo_path   TEXT NOT NULL,
-    repo_name   TEXT NOT NULL,
-    scanned_at  INTEGER NOT NULL,
-    total       INTEGER DEFAULT 0,
-    critical    INTEGER DEFAULT 0,
-    high        INTEGER DEFAULT 0,
-    medium      INTEGER DEFAULT 0,
-    secrets     INTEGER DEFAULT 0,
-    history     INTEGER DEFAULT 0,
-    deps        INTEGER DEFAULT 0,
-    bumblebee   INTEGER DEFAULT 0,
-    osv         INTEGER DEFAULT 0
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_path         TEXT NOT NULL,
+    repo_name         TEXT NOT NULL,
+    scanned_at        INTEGER NOT NULL,
+    total             INTEGER DEFAULT 0,
+    critical          INTEGER DEFAULT 0,
+    high              INTEGER DEFAULT 0,
+    medium            INTEGER DEFAULT 0,
+    secrets           INTEGER DEFAULT 0,
+    history           INTEGER DEFAULT 0,
+    deps              INTEGER DEFAULT 0,
+    bumblebee         INTEGER DEFAULT 0,
+    local_threat_intel INTEGER DEFAULT 0,
+    osv               INTEGER DEFAULT 0
   );
 
   CREATE INDEX IF NOT EXISTS idx_security_scans_scanned_at ON security_scans(scanned_at);
@@ -94,6 +95,7 @@ db.run(`
 `);
 
 try { db.run(`ALTER TABLE security_scans ADD COLUMN findings TEXT DEFAULT '[]'`); } catch {}
+try { db.run(`ALTER TABLE security_scans ADD COLUMN local_threat_intel INTEGER DEFAULT 0`); } catch {}
 
 save();
 
@@ -325,10 +327,10 @@ export function queryTrends(org, repo, project, grain, periods) {
 export function insertSecurityScan(row) {
   const stmt = db.prepare(`
     INSERT INTO security_scans
-      (repo_path, repo_name, scanned_at, total, critical, high, medium, secrets, history, deps, bumblebee, osv, findings)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (repo_path, repo_name, scanned_at, total, critical, high, medium, secrets, history, deps, bumblebee, local_threat_intel, osv, findings)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  stmt.run([row.repo_path, row.repo_name, row.scanned_at, row.total, row.critical, row.high, row.medium, row.secrets, row.history, row.deps, row.bumblebee, row.osv, JSON.stringify(row.findings || [])]);
+  stmt.run([row.repo_path, row.repo_name, row.scanned_at, row.total, row.critical, row.high, row.medium, row.secrets, row.history, row.deps, row.bumblebee, row.local_threat_intel ?? 0, row.osv, JSON.stringify(row.findings || [])]);
   stmt.free();
   save();
 }

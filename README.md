@@ -1,8 +1,6 @@
 # DevPulse
 
-Developer flow productivity metrics dashboard. Connects GitHub and Jira to surface cycle times, throughput, review health, and team velocity — all stored locally in SQLite.
-
-> **Status:** In progress
+Developer productivity metrics dashboard. Connects GitHub and Jira to surface cycle times, throughput, review health, and team velocity — all stored locally in SQLite with no data leaving your machine.
 
 ## What it does
 
@@ -13,16 +11,16 @@ Developer flow productivity metrics dashboard. Connects GitHub and Jira to surfa
 - Adjustable time window: 7D / 30D / 90D / 6M / 1Y
 - Sparklines and mini bar charts for trend visibility
 - Incremental re-sync at any time via SSE streaming
-- Security scanner for local workspaces — secrets, git history, and dependency audits
+- Security scanner for local workspaces — secrets, git history, supply-chain, and CVE audits
 
 ## Stack
 
 - **Frontend:** React (JSX, no build step), dark monospace UI
-- **Backend:** Node.js + Express on port 3002
+- **Backend:** Node.js + Express on port 3003
 - **Database:** SQLite via `sql.js` (WebAssembly, file-persisted as `devpulse.db`)
 - **Data sources:** GitHub REST API, Jira Cloud REST API
 
-## Setup
+## Quick start
 
 ```bash
 cd server
@@ -30,14 +28,29 @@ npm install
 npm start        # or: npm run dev  (watch mode)
 ```
 
-Then open `http://localhost:3002` in your browser.
+Open `http://localhost:3003` in your browser.
 
 ## First-run flow
 
 1. **Connect** — Enter GitHub (PAT + org + repo) and Jira (API token + email + domain + project key) credentials. Credentials are stored server-side only in SQLite and never sent to the browser.
 2. **Initial sync** — Backfills up to 180 days of PR and ticket history. Progress streams via SSE.
 3. **Map users** — Link Jira assignees to GitHub logins, then define teams.
-4. **Dashboard** — Explore metrics across the five tabs.
+4. **Dashboard** — Explore metrics across the six tabs.
+
+## Docker
+
+```bash
+cp docker-compose.override.yml.example docker-compose.override.yml
+# edit docker-compose.override.yml with your config
+docker compose up
+```
+
+## Required credentials
+
+| Source | What you need |
+|--------|--------------|
+| GitHub | Personal Access Token with `repo` scope |
+| Jira | API token, account email, Atlassian domain, project key |
 
 ## API
 
@@ -52,6 +65,11 @@ Then open `http://localhost:3002` in your browser.
 | `GET/POST` | `/api/mappings` | User↔team mappings |
 | `GET` | `/api/security/workspaces` | Auto-detect git repos from common disk locations |
 | `POST` | `/api/security/scan` | Scan a workspace; streams findings as SSE |
+| `POST` | `/api/security/scan-all` | Scan all detected workspaces; streams progress as SSE |
+| `GET` | `/api/security/history` | Latest per-repo summaries and 30-day trend |
+| `GET` | `/api/security/findings` | Findings for a repo (`?repoPath=<path>&severity=<sev>`) |
+| `GET` | `/api/security/repo/*` | Latest scan + history for a specific repo |
+| `GET` | `/api/security/scans-at` | All repos scanned at a given timestamp (`?scanned_at=<ms>`) |
 
 ## Metrics tracked
 
@@ -72,37 +90,39 @@ Then open `http://localhost:3002` in your browser.
 
 The Security tab scans local git repositories without making any network calls.
 
-**Auto-detects repos** from `~`, `~/projects`, `~/dev`, `~/work`, `~/code`, `~/src`, `~/repos`, and `~/Documents` (up to 3 levels deep, capped at 150 repos).
+**Auto-detects repos** from `~`, `~/projects`, `~/dev`, `~/work`, `~/code`, `~/src`, `~/repos`, and `~/Documents` (up to 3 levels deep, capped at 150 repos). Override with the `REPO_ROOTS` environment variable (colon-separated paths).
 
-**Three scan types per repo:**
+**Six scan types per repo:**
 
 | Scan | What it checks |
 |------|---------------|
 | Source file secrets | Walks all `.js/.ts/.py/.go/.env/` etc. files; matches 9 secret patterns |
 | Git history | `git log -p` over the last 300 commits; catches secrets committed then removed |
 | Dependency audit | `npm audit` (if `package.json` present), `pip-audit` (if `requirements.txt` present); skips `low` severity |
+| Supply chain | `bumblebee` scan against a threat-intel catalog (requires `BUMBLEBEE_THREAT_INTEL_PATH`) |
+| Local threat intel | Checks installed packages against bundled JSON threat-intel feeds in `server/threat-intel/` |
+| CVE lockfile scan | `osv-scanner` against `package-lock.json` or `uv.lock` |
 
 **Detected secret types:** AWS Access Key IDs, GitHub tokens, RSA/EC/OPENSSH private keys, Stripe secret keys, Slack tokens, Google API keys, generic passwords/secrets/API key assignments.
 
 All matched values are **redacted** in the UI — only the first 3 and last 2 characters are shown.
 
+Suppress false positives by adding paths to `.devpulseignore` at the root of any scanned repo (same format as `.gitignore`).
+
 ## Tests
 
 ```bash
 cd server
-npm test          # runs security.test.js with node:test (no extra deps)
+npm test          # runs all tests with node:test (no extra deps)
 ```
 
-44 unit tests cover:
+90 tests cover:
 - Pattern true-positive and false-positive cases for all 9 secret rules
 - `scanFileSecrets`: clean dirs, per-rule detection, `.env` variants, `node_modules` skip, redaction, line numbers, nested dirs
 - `scanGitHistory`: empty repo, secret committed-then-removed, current commit, delete-only commits, redaction
 - `scanDependencies`: no manifest, empty package.json, finding shape contract
+- `scanBumblebee` / `scanLocalThreatIntel` / `scanOsv`: empty inputs, safe versions, known-bad versions
+- `runFullScan`: progress callbacks, zero-finding repos, no-callback mode
 - `findGitRepos`: custom roots, `node_modules` exclusion, nested repos, stop-at-repo behaviour
-
-## Required credentials
-
-| Source | What you need |
-|--------|--------------|
-| GitHub | Personal Access Token with `repo` scope |
-| Jira | API token, account email, Atlassian domain, project key |
+- DB layer: config CRUD, mappings, security scan persistence (including `local_threat_intel` count)
+- API layer: all endpoints, SSE streams, error responses
