@@ -194,24 +194,18 @@ export function saveMappings({ mappings, teams }) {
 }
 
 // ── Metrics query ───────────────────────────────────────────────────────────
-export function queryMetrics(org, repo, project, fromMs, toMs) {
-  const daysInPeriod = (toMs - fromMs) / 86400000;
-
-  // GitHub aggregate
+function queryGitHubMetrics(org, repo, fromMs, toMs, numWeeks, daysInPeriod) {
   const ghAgg = execGet(`
     SELECT COUNT(*) as total, AVG(cycle_time_days) as avgCycle, AVG(review_time_days) as avgReview
     FROM pr_events WHERE org=? AND repo=? AND merged_at BETWEEN ? AND ?
   `, [org, repo, fromMs, toMs]);
 
-  // GitHub by author
   const ghAuthors = execAll(`
     SELECT author, COUNT(*) as prs, SUM(cycle_time_days) as totalCycle
     FROM pr_events WHERE org=? AND repo=? AND merged_at BETWEEN ? AND ?
     GROUP BY author ORDER BY prs DESC
   `, [org, repo, fromMs, toMs]);
 
-  // GitHub weekly buckets (up to 8)
-  const numWeeks = Math.min(8, Math.ceil(daysInPeriod / 7));
   const ghWeeks = Array.from({ length: numWeeks }, (_, i) => {
     const end   = toMs - i * 7 * 86400000;
     const start = end - 7 * 86400000;
@@ -219,13 +213,26 @@ export function queryMetrics(org, repo, project, fromMs, toMs) {
     return { label: `W-${i + 1}`, count: n };
   }).reverse();
 
-  // Jira aggregate
+  const authorMap = {};
+  ghAuthors.forEach(a => { authorMap[a.author] = { prs: a.prs, totalCycle: a.totalCycle || 0 }; });
+
+  return {
+    totalMerged:   ghAgg.total || 0,
+    avgCycleTime:  ghAgg.avgCycle || 0,
+    avgReviewTime: ghAgg.avgReview || 0,
+    mergeRate:     ((ghAgg.total || 0) / (daysInPeriod / 7)).toFixed(1),
+    authorMap,
+    weeks: ghWeeks,
+  };
+}
+
+function queryJiraMetrics(project, fromMs, toMs, numWeeks, daysInPeriod) {
   const DONE_STATUSES = ['Done', 'Closed', 'Resolved'];
-  const placeholders = DONE_STATUSES.map(() => '?').join(',');
-  
+  const ph = DONE_STATUSES.map(() => '?').join(',');
+
   const jiAgg = execGet(`
     SELECT COUNT(*) as done, AVG(cycle_time_days) as avgCycle
-    FROM jira_issues WHERE project=? AND status IN (${placeholders}) AND resolved_at BETWEEN ? AND ?
+    FROM jira_issues WHERE project=? AND status IN (${ph}) AND resolved_at BETWEEN ? AND ?
   `, [project, ...DONE_STATUSES, fromMs, toMs]);
 
   const jiInProgress = execGet(`
@@ -234,16 +241,12 @@ export function queryMetrics(org, repo, project, fromMs, toMs) {
 
   const jiTotal = execGet(`SELECT COUNT(*) as n FROM jira_issues WHERE project=?`, [project]).n;
 
-  // Jira by assignee
   const jiAssignees = execAll(`
-    SELECT assignee_id, assignee_name,
-           COUNT(*) as done,
-           SUM(cycle_time_days) as totalCycle
-    FROM jira_issues WHERE project=? AND status IN (${placeholders}) AND resolved_at BETWEEN ? AND ?
+    SELECT assignee_id, assignee_name, COUNT(*) as done, SUM(cycle_time_days) as totalCycle
+    FROM jira_issues WHERE project=? AND status IN (${ph}) AND resolved_at BETWEEN ? AND ?
     GROUP BY assignee_id ORDER BY done DESC
   `, [project, ...DONE_STATUSES, fromMs, toMs]);
 
-  // All jira assignees (for totals)
   const jiAllAssignees = execAll(`
     SELECT assignee_id, assignee_name, COUNT(*) as total
     FROM jira_issues WHERE project=? GROUP BY assignee_id
@@ -263,33 +266,27 @@ export function queryMetrics(org, repo, project, fromMs, toMs) {
   const jiWeeks = Array.from({ length: numWeeks }, (_, i) => {
     const end   = toMs - i * 7 * 86400000;
     const start = end - 7 * 86400000;
-    const n = execGet(`SELECT COUNT(*) as n FROM jira_issues WHERE project=? AND status IN (${placeholders}) AND resolved_at BETWEEN ? AND ?`, [project, ...DONE_STATUSES, start, end]).n;
+    const n = execGet(`SELECT COUNT(*) as n FROM jira_issues WHERE project=? AND status IN (${ph}) AND resolved_at BETWEEN ? AND ?`, [project, ...DONE_STATUSES, start, end]).n;
     return { label: `W-${i + 1}`, count: n };
   }).reverse();
 
-  const authorMap = {};
-  ghAuthors.forEach(a => {
-    authorMap[a.author] = { prs: a.prs, totalCycle: a.totalCycle || 0 };
-  });
-
   return {
-    github: {
-      totalMerged: ghAgg.total || 0,
-      avgCycleTime: ghAgg.avgCycle || 0,
-      avgReviewTime: ghAgg.avgReview || 0,
-      mergeRate: ( (ghAgg.total || 0) / (daysInPeriod / 7) ).toFixed(1),
-      authorMap,
-      weeks: ghWeeks,
-    },
-    jira: {
-      total: jiTotal || 0,
-      done: jiAgg.done || 0,
-      inProgress: jiInProgress || 0,
-      throughput: ( (jiAgg.done || 0) / (daysInPeriod / 7) ).toFixed(1),
-      avgCycleTime: jiAgg.avgCycle || 0,
-      assigneeMap,
-      weeks: jiWeeks,
-    }
+    total:        jiTotal || 0,
+    done:         jiAgg.done || 0,
+    inProgress:   jiInProgress || 0,
+    throughput:   ((jiAgg.done || 0) / (daysInPeriod / 7)).toFixed(1),
+    avgCycleTime: jiAgg.avgCycle || 0,
+    assigneeMap,
+    weeks: jiWeeks,
+  };
+}
+
+export function queryMetrics(org, repo, project, fromMs, toMs) {
+  const daysInPeriod = (toMs - fromMs) / 86400000;
+  const numWeeks = Math.min(8, Math.ceil(daysInPeriod / 7));
+  return {
+    github: queryGitHubMetrics(org, repo, fromMs, toMs, numWeeks, daysInPeriod),
+    jira:   queryJiraMetrics(project, fromMs, toMs, numWeeks, daysInPeriod),
   };
 }
 

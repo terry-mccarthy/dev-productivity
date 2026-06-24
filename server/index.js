@@ -23,17 +23,45 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(join(__dir, '..')));
 
+function buildGhResponse(cfg) {
+  return { org: cfg.gh_org || '', repo: cfg.gh_repo || '' };
+}
+
+function buildJiraResponse(cfg) {
+  return { email: cfg.jira_email || '', domain: cfg.jira_domain || '', project: cfg.jira_project || '' };
+}
+
+function buildConfigResponse(cfg) {
+  return {
+    hasConfig: !!(cfg.gh_token && cfg.gh_org),
+    gh:        buildGhResponse(cfg),
+    jira:      buildJiraResponse(cfg),
+    lastSynced: cfg.last_synced ? parseInt(cfg.last_synced) : null,
+  };
+}
+
+function countSeverities(findings) {
+  const sev = { critical: 0, high: 0, medium: 0 };
+  for (const f of findings) {
+    if (f.severity === 'critical') sev.critical++;
+    else if (f.severity === 'high') sev.high++;
+    else sev.medium++;
+  }
+  return sev;
+}
+
+function isJiraConfigured(cfg) {
+  return !!(cfg.jira_token && cfg.jira_domain && cfg.jira_project);
+}
+
+function parseDays(body) {
+  return parseInt(body?.days) || 180;
+}
+
 // ── GET /api/config ─────────────────────────────────────────────────────────
 // Returns stored config with tokens redacted (just confirms what's saved)
 app.get('/api/config', (req, res) => {
-  const cfg = getConfig();
-  const hasConfig = !!(cfg.gh_token && cfg.gh_org && cfg.gh_repo);
-  res.json({
-    hasConfig,
-    gh:   { org: cfg.gh_org   || '', repo: cfg.gh_repo   || '' },
-    jira: { email: cfg.jira_email || '', domain: cfg.jira_domain || '', project: cfg.jira_project || '' },
-    lastSynced: cfg.last_synced ? parseInt(cfg.last_synced) : null,
-  });
+  res.json(buildConfigResponse(getConfig()));
 });
 
 // ── POST /api/config ────────────────────────────────────────────────────────
@@ -60,40 +88,39 @@ app.post('/api/config', (req, res) => {
 // Accepts optional `{ days: 180 }` body to control backfill depth.
 let syncInProgress = false;
 
+async function runSyncStream(cfg, days, send) {
+  const cutoff = new Date(Date.now() - days * 86400000);
+  send({ stage: 'github', message: 'Fetching GitHub PRs…' });
+  const prRows = await fetchGitHubEvents(cfg.gh_token, cfg.gh_org, cfg.gh_repo, cutoff);
+  upsertPRs(prRows);
+  send({ stage: 'github', message: `Stored ${prRows.length} PR events` });
+
+  if (isJiraConfigured(cfg)) {
+    send({ stage: 'jira', message: 'Fetching Jira issues…' });
+    const issueRows = await fetchJiraEvents(cfg.jira_token, cfg.jira_email, cfg.jira_domain, cfg.jira_project, cutoff);
+    upsertIssues(issueRows);
+    send({ stage: 'jira', message: `Stored ${issueRows.length} issue events` });
+  } else {
+    send({ stage: 'jira', message: 'Jira not configured — skipping' });
+  }
+
+  setConfig({ last_synced: Date.now().toString() });
+  send({ stage: 'done', message: 'Sync complete' });
+}
+
 app.post('/api/sync', async (req, res) => {
   if (syncInProgress) return res.status(409).json({ error: 'Sync already in progress' });
 
   const cfg = getConfig();
-  if (!cfg.gh_token) {
-    return res.status(400).json({ error: 'Not configured — POST /api/config first' });
-  }
+  if (!cfg.gh_token) return res.status(400).json({ error: 'Not configured — POST /api/config first' });
 
-  const days = parseInt(req.body?.days) || 180;
-  const cutoff = new Date(Date.now() - days * 86400000);
   syncInProgress = true;
-
-  // Stream progress via SSE if client wants it, else just respond when done
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   const send = (msg) => res.write(`data: ${JSON.stringify(msg)}\n\n`);
 
   try {
-    send({ stage: 'github', message: 'Fetching GitHub PRs…' });
-    const prRows = await fetchGitHubEvents(cfg.gh_token, cfg.gh_org, cfg.gh_repo, cutoff);
-    upsertPRs(prRows);
-    send({ stage: 'github', message: `Stored ${prRows.length} PR events` });
-
-    if (cfg.jira_token && cfg.jira_domain && cfg.jira_project) {
-      send({ stage: 'jira', message: 'Fetching Jira issues…' });
-      const issueRows = await fetchJiraEvents(cfg.jira_token, cfg.jira_email, cfg.jira_domain, cfg.jira_project, cutoff);
-      upsertIssues(issueRows);
-      send({ stage: 'jira', message: `Stored ${issueRows.length} issue events` });
-    } else {
-      send({ stage: 'jira', message: 'Jira not configured — skipping' });
-    }
-
-    setConfig({ last_synced: Date.now().toString() });
-    send({ stage: 'done', message: 'Sync complete' });
+    await runSyncStream(cfg, parseDays(req.body), send);
     res.end();
   } catch (err) {
     console.error('[sync] Error:', err);
@@ -213,11 +240,7 @@ app.post('/api/security/scan', (req, res) => {
     send({ stage: 'osv_done', count: osvFindings.length, scanned, findings: osvFindings });
 
     const allFindings = [...secrets, ...history, ...deps, ...bumblebeeFindings, ...localThreatFindings, ...osvFindings];
-    const sev = { critical: 0, high: 0, medium: 0 };
-    for (const f of allFindings) {
-      const s = f.severity === 'critical' ? 'critical' : f.severity === 'high' ? 'high' : 'medium';
-      sev[s]++;
-    }
+    const sev = countSeverities(allFindings);
     insertSecurityScan({
       repo_path: scanPath,
       repo_name: basename(scanPath),
@@ -245,36 +268,35 @@ app.post('/api/security/scan', (req, res) => {
 
 // ── POST /api/security/scan-all ──────────────────────────────────────────────
 // Scans all detected repos, stores results in DB, returns summary
+async function runScanAllStream(send) {
+  const paths = findGitRepos();
+  const results = [];
+  log(`Scan-all: found ${paths.length} repos`);
+  const batchScannedAt = Date.now();
+  for (let i = 0; i < paths.length; i++) {
+    const name = basename(paths[i]);
+    log(`Scan-all [${i + 1}/${paths.length}]: ${name} — secrets`);
+    send({ stage: 'progress', current: i + 1, total: paths.length, repo: name, subStage: 'secrets' });
+    const result = runFullScan(paths[i], (subStage) => {
+      log(`Scan-all [${i + 1}/${paths.length}]: ${name} — ${subStage}`);
+      send({ stage: 'progress', current: i + 1, total: paths.length, repo: name, subStage });
+    });
+    result.scanned_at = batchScannedAt;
+    insertSecurityScan(result);
+    results.push(result);
+    log(`Scan-all [${i + 1}/${paths.length}]: ${name} — done (${result.total} findings, ${result.critical} critical, ${result.high} high)`);
+  }
+  send({ stage: 'done', count: results.length, results });
+  log(`Scan-all: all ${paths.length} repos complete — ${results.reduce((s, r) => s + r.total, 0)} total findings`);
+}
+
 app.post('/api/security/scan-all', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   const send = (msg) => res.write(`data: ${JSON.stringify(msg)}\n\n`);
-
   try {
-    const paths = findGitRepos();
-    const results = [];
-
-    log(`Scan-all: found ${paths.length} repos`);
-
-    const batchScannedAt = Date.now();
-
-    for (let i = 0; i < paths.length; i++) {
-      const name = basename(paths[i]);
-      log(`Scan-all [${i + 1}/${paths.length}]: ${name} — secrets`);
-      send({ stage: 'progress', current: i + 1, total: paths.length, repo: name, subStage: 'secrets' });
-      const result = runFullScan(paths[i], (subStage) => {
-        log(`Scan-all [${i + 1}/${paths.length}]: ${name} — ${subStage}`);
-        send({ stage: 'progress', current: i + 1, total: paths.length, repo: name, subStage });
-      });
-      result.scanned_at = batchScannedAt;
-      insertSecurityScan(result);
-      results.push(result);
-      log(`Scan-all [${i + 1}/${paths.length}]: ${name} — done (${result.total} findings, ${result.critical} critical, ${result.high} high)`);
-    }
-
-    send({ stage: 'done', count: results.length, results });
+    await runScanAllStream(send);
     res.end();
-    log(`Scan-all: all ${paths.length} repos complete — ${results.reduce((s, r) => s + r.total, 0)} total findings`);
   } catch (err) {
     log(`Scan-all ERROR: ${err.message}`);
     send({ stage: 'error', message: err.message });
@@ -331,37 +353,38 @@ app.get('/api/security/repo/*', (req, res) => {
 // ── POST /api/security/update-threat-intel ───────────────────────────────────
 // Downloads all JSON feeds from perplexityai/bumblebee/threat_intel and writes
 // them to the local threat-intel directory so they're picked up on the next scan.
-app.post('/api/security/update-threat-intel', async (req, res) => {
+async function downloadThreatIntelFeeds(headers) {
   const GITHUB_API = 'https://api.github.com/repos/perplexityai/bumblebee/contents/threat_intel';
+  const listRes = await fetch(GITHUB_API, { headers });
+  if (!listRes.ok) throw Object.assign(new Error(`GitHub API ${listRes.status}: ${listRes.statusText}`), { status: 502 });
+
+  const entries = await listRes.json();
+  const jsonFiles = entries.filter(e => e.type === 'file' && e.name.endsWith('.json'));
+  const threatIntelDir = process.env.THREAT_INTEL_DIR || join(__dir, 'threat-intel');
+  mkdirSync(threatIntelDir, { recursive: true });
+
+  const downloaded = [];
+  for (const file of jsonFiles) {
+    const contentRes = await fetch(file.download_url);
+    if (!contentRes.ok) continue;
+    writeFileSync(join(threatIntelDir, file.name), await contentRes.text(), 'utf8');
+    downloaded.push(file.name);
+  }
+  return downloaded;
+}
+
+app.post('/api/security/update-threat-intel', async (req, res) => {
   const cfg = getConfig();
   const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'devpulse' };
   if (cfg.gh_token) headers['Authorization'] = `Bearer ${cfg.gh_token}`;
 
   try {
-    const listRes = await fetch(GITHUB_API, { headers });
-    if (!listRes.ok) {
-      return res.status(502).json({ error: `GitHub API ${listRes.status}: ${listRes.statusText}` });
-    }
-    const entries = await listRes.json();
-    const jsonFiles = entries.filter(e => e.type === 'file' && e.name.endsWith('.json'));
-
-    const threatIntelDir = process.env.THREAT_INTEL_DIR || join(__dir, 'threat-intel');
-    mkdirSync(threatIntelDir, { recursive: true });
-
-    const downloaded = [];
-    for (const file of jsonFiles) {
-      const contentRes = await fetch(file.download_url);
-      if (!contentRes.ok) continue;
-      const text = await contentRes.text();
-      writeFileSync(join(threatIntelDir, file.name), text, 'utf8');
-      downloaded.push(file.name);
-    }
-
+    const downloaded = await downloadThreatIntelFeeds(headers);
     log(`Threat intel updated: ${downloaded.length} feeds from perplexityai/bumblebee`);
     res.json({ updated: downloaded.length, files: downloaded });
   } catch (err) {
     log(`Threat intel update failed: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

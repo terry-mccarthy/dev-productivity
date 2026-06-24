@@ -10,11 +10,39 @@ async function sleep(ms) {
  * Fetch all merged PRs since `cutoffDate` for a given repo.
  * Paginates until it reaches the cutoff or runs out of pages.
  */
+async function handleRateLimit(res) {
+  if (res.status !== 403) return false;
+  const reset = res.headers.get('x-ratelimit-reset');
+  const wait = reset ? (parseInt(reset) * 1000 - Date.now() + 2000) : 60000;
+  console.log(`[github] Rate limited — waiting ${Math.round(wait / 1000)}s`);
+  await sleep(wait);
+  return true;
+}
+
+function prToRow(pr, org, repo, reviewMap, now) {
+  return {
+    id:               `${org}/${repo}#${pr.number}`,
+    org,
+    repo,
+    author:           pr.user?.login || 'unknown',
+    created_at:       new Date(pr.created_at).getTime(),
+    merged_at:        new Date(pr.merged_at).getTime(),
+    cycle_time_days:  daysBetween(pr.created_at, pr.merged_at),
+    review_time_days: reviewMap.get(pr.number) ?? null,
+    synced_at:        now,
+  };
+}
+
+function mergedAfter(cutoffDate) {
+  return (p) => p.merged_at && new Date(p.merged_at) > cutoffDate;
+}
+
 async function fetchAllMergedPRs(token, org, repo, cutoffDate) {
   const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
   const base = 'https://api.github.com';
   let page = 1;
   const allPRs = [];
+  const isMergedAfter = mergedAfter(cutoffDate);
 
   while (true) {
     const res = await fetch(
@@ -22,28 +50,19 @@ async function fetchAllMergedPRs(token, org, repo, cutoffDate) {
       { headers }
     );
 
-    if (res.status === 403) {
-      const reset = res.headers.get('x-ratelimit-reset');
-      const wait  = reset ? (parseInt(reset) * 1000 - Date.now() + 2000) : 60000;
-      console.log(`[github] Rate limited — waiting ${Math.round(wait / 1000)}s`);
-      await sleep(wait);
-      continue;
-    }
-
+    if (await handleRateLimit(res)) continue;
     if (!res.ok) throw new Error(`GitHub ${res.status}: ${res.statusText}`);
 
     const prs = await res.json();
     if (!prs.length) break;
 
-    const merged = prs.filter(p => p.merged_at && new Date(p.merged_at) > cutoffDate);
-    allPRs.push(...merged);
+    allPRs.push(...prs.filter(isMergedAfter));
 
-    // Stop if last PR in page is older than cutoff
     const oldestMergedAt = prs[prs.length - 1].merged_at;
     if (!oldestMergedAt || new Date(oldestMergedAt) < cutoffDate) break;
 
     page++;
-    await sleep(200); // gentle rate limiting
+    await sleep(200);
   }
 
   return allPRs;
@@ -108,17 +127,7 @@ export async function fetchGitHubEvents(token, org, repo, cutoffDate) {
     const reviewMap = await enrichWithReviewTimes(token, org, r, prs);
     const now = Date.now();
     for (const pr of prs) {
-      allRows.push({
-        id:               `${org}/${r}#${pr.number}`,
-        org,
-        repo:             r,
-        author:           pr.user?.login || 'unknown',
-        created_at:       new Date(pr.created_at).getTime(),
-        merged_at:        new Date(pr.merged_at).getTime(),
-        cycle_time_days:  daysBetween(pr.created_at, pr.merged_at),
-        review_time_days: reviewMap.get(pr.number) ?? null,
-        synced_at:        now,
-      });
+      allRows.push(prToRow(pr, org, r, reviewMap, now));
     }
   }
   return allRows;

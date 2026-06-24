@@ -42,23 +42,29 @@ export async function fetchJiraEvents(token, email, domain, project, cutoffDate)
   console.log(`[jira] Found ${all.length} issues`);
 
   const now = Date.now();
-  return all.map(i => {
-    const status = i.fields.status?.name || 'Unknown';
-    const resolvedAt = DONE_STATUSES.has(status) && i.fields.resolutiondate
-      ? new Date(i.fields.resolutiondate).getTime()
-      : null;
-    const createdAt = i.fields.created ? new Date(i.fields.created).getTime() : null;
+  return all.map(i => toEvent(i, project, now));
+}
 
-    return {
-      id:              i.key,
-      project,
-      assignee_id:     i.fields.assignee?.accountId  || 'unassigned',
-      assignee_name:   i.fields.assignee?.displayName || 'Unassigned',
-      created_at:      createdAt,
-      resolved_at:     resolvedAt,
-      cycle_time_days: createdAt && resolvedAt ? daysBetween(i.fields.created, i.fields.resolutiondate) : null,
-      status,
-      synced_at:       now,
-    };
-  });
+function computeTimestamps(fields, status) {
+  const createdAt = fields.created ? new Date(fields.created).getTime() : null;
+  const resolvedAt = DONE_STATUSES.has(status) && fields.resolutiondate
+    ? new Date(fields.resolutiondate).getTime()
+    : null;
+  return { createdAt, resolvedAt };
+}
+
+function toEvent(issue, project, now) {
+  const status = issue.fields.status?.name || 'Unknown';
+  const { createdAt, resolvedAt } = computeTimestamps(issue.fields, status);
+  return {
+    id:              issue.key,
+    project,
+    assignee_id:     issue.fields.assignee?.accountId  || 'unassigned',
+    assignee_name:   issue.fields.assignee?.displayName || 'Unassigned',
+    created_at:      createdAt,
+    resolved_at:     resolvedAt,
+    cycle_time_days: createdAt && resolvedAt ? daysBetween(issue.fields.created, issue.fields.resolutiondate) : null,
+    status,
+    synced_at:       now,
+  };
 }
